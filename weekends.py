@@ -49,11 +49,22 @@ def get_weekends(start_date):
 # FILTRO
 # ============================
 
+def normalize_price(p):
+    """Convierte precio de dict o string a float."""
+    try:
+        if isinstance(p, dict):
+            return float(p.get("amount", 9999))
+        return float(str(p).replace("€", "").replace(",", "."))
+    except:
+        return 9999.0
+
+
 def filter_flights(flights):
     filtered = []
     for f in flights:
-        price = f["price"]
-        country = f["country"]
+        price = normalize_price(f.get("price", 9999))
+        f["price"] = price  # almacenamos el valor limpio para el email
+        country = f.get("country", "")
 
         if country in EUROPE_CODES or country == "MA":
             if price <= EUROPE_PRICE:

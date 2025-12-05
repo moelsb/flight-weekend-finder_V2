@@ -6,11 +6,12 @@ from email.mime.text import MIMEText
 import time
 
 # ============================
-# CONFIGURACIÓN
+# CONFIGURACIÓN BÁSICA
 # ============================
 
 ORIGINS = ["BCN", "GRO"]
 
+#Paises donde maximo precio es EUROPE_PRICE
 EUROPE_CODES = {
     "AL","AD","AT","BY","BE","BA","BG","HR","CY","CZ","DK","EE","FI","FR",
     "DE","GR","HU","IE","IT","LV","LI","LT","LU","MT","MD","MC","ME",
@@ -24,8 +25,24 @@ EUROPE_CODES = {
 EUROPE_PRICE = 50.0
 WORLD_PRICE = 150.0
 
+# Fines de semana regulares: cada 14 días
 INTERVAL_DAYS = 14
-MAX_WEEKENDS_PER_RUN = 1  # controla consumo API
+MAX_WEEKENDS_PER_RUN = 1  # cuántos bloques (dep, ret) miramos por ejecución; controla consumo API
+
+# Fines de semana largos extra (puentes)
+EXTRA_LONG_WEEKENDS = [
+    # Formato: ("YYYY-MM-DD_salida", "YYYY-MM-DD_regreso")
+    ("2026-03-28", "2026-04-02"),  # Semana Santa con Sofi
+    ("2026-04-03", "2026-04-06"),  # Semana Santa
+    ("2026-05-01", "2026-05-03"),  # Dia del trabajador
+    ("2026-05-22", "2026-05-25"),  # White Monday
+    ("2026-08-01", "2026-08-16"),  # Verano Pt. 1
+    ("2026-08-16", "2026-08-30"),  # Verano Pt. 2
+    ("2026-09-11", "2026-09-14"),  # Catalunya Day
+    ("2026-10-09", "2026-10-12"),  # Spanish National Day
+    ("2026-12-24", "2026-12-29"),  # Navidad
+]
+
 
 AMADEUS_CLIENT_ID = os.environ.get("AMADEUS_CLIENT_ID")
 AMADEUS_CLIENT_SECRET = os.environ.get("AMADEUS_CLIENT_SECRET")
@@ -52,21 +69,31 @@ def get_token():
     return r.json()["access_token"]
 
 
-def next_friday_from(d):
-    days = (4 - d.weekday()) % 7
-    return d if days == 0 else d + timedelta(days=days)
-
-
 def generate_weekends(start_date):
-    if isinstance(start_date, str):
-        start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
-    d = next_friday_from(start_date)
+    if isinstance(first_friday_str, str):
+        d = datetime.strptime(first_friday_str, "%Y-%m-%d").date()
+    else
+        d = first_friday_str
     weekends = []
     for _ in range(MAX_WEEKENDS_PER_RUN):
-        weekends.append((d, d + timedelta(days=3)))
+        friday = d
+        monday = d + timedelta(days=3)
+        weekends.append((friday, monday))
         d = d + timedelta(days=INTERVAL_DAYS)
     return weekends
 
+def get_all_periods(first_friday_str):
+    regular = generate_regular_weekends(first_friday_str)
+
+    extra = []
+    for dep_str, ret_str in EXTRA_LONG_WEEKENDS:
+        dep = datetime.strptime(dep_str, "%Y-%m-%d").date()
+        ret = datetime.strptime(ret_str, "%Y-%m-%d").date()
+        extra.append((dep, ret))
+
+    # combinar y eliminar duplicados
+    all_periods = set(regular + extra)
+    return sorted(all_periods)
 
 def normalize_price(p):
     try:
@@ -158,7 +185,7 @@ def send_email(results):
 # ============================
 
 def main():
-    start = os.environ.get("START_DATE", date.today().strftime("%Y-%m-%d"))
+    start = os.environ.get("first_friday_str", date.today().strftime("%Y-%m-%d"))
     weekends = generate_weekends(start)
 
     try:

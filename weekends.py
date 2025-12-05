@@ -227,7 +227,7 @@ def main():
             offers = search_amadeus(origin, dep, ret, token)
             for off in offers:
                 price, dest, country, duration, link = extract_data(off)
-                if duration < MIN_DURATION:  # mínimo 1 hora
+                if duration < MIN_DURATION:
                     continue
 
                 

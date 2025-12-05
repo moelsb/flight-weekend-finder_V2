@@ -1,9 +1,9 @@
 import os
 import requests
-from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import smtplib
 from email.mime.text import MIMEText
+import time
 
 # ============================
 # CONFIGURACIÓN
@@ -13,263 +13,193 @@ ORIGINS = ["BCN", "GRO"]
 
 EUROPE_CODES = {
     "AL","AD","AT","BY","BE","BA","BG","HR","CY","CZ","DK","EE","FI","FR",
-    "DE","GR","HU","IS","IE","IT","LV","LI","LT","LU","MT","MD","MC","ME",
-    "NL","MK","NO","PL","PT","RO","RU","SM","RS","SK","SI","ES","SE","CH",
-    "UA","GB","VA"
+    "DE","GR","HU","IE","IT","LV","LI","LT","LU","MT","MD","MC","ME",
+    "NL","MK","NO","PL","PT","RO","SM","RS","SK","SI","ES","SE","CH",
+    "UA","GB","VA","XK", "DZ", "MA"
 }
+#NO EN LA LISTA: "IS": Islandia, "RU": Rusia, "TR" Turquía
+#"AL": Albania, "AD": Andorra, "AT": Austria, "BY": Bielorrusia, "BE": Bélgica, "BA": Bosnia y Herzegovina, "BG": Bulgaria, "HR": Croacia, "CY": Chipre, "CZ": República Checa, "DK": Dinamarca, "EE": Estonia, "FI": Finlandia, "FR": Francia, "DE": Alemania, "GR": Grecia, "HU": Hungría, "IE": Irlanda, "IT": Italia, "LV": Letonia, "LI": Liechtenstein, "LT": Lituania, "LU": Luxemburgo, "MT": Malta, "MD": Moldavia, "MC": Mónaco, "ME": Montenegro, "NL": Países Bajos, "MK": Macedonia del Norte, "NO": Noruega, "PL": Polonia, "PT": Portugal, "RO": Rumanía, "SM": San Marino, "RS": Serbia, "SK": Eslovaquia, "SI": Eslovenia, "ES": España, "SE": Suecia, "CH": Suiza, "UA": Ucrania, "GB": Reino Unido, "VA": Ciudad del Vaticano, "XK" Kosovo
+#Extra Europa: "DZ": Argelia, "MA": Marruecos 
 
-EUROPE_PRICE = 50
-WORLD_PRICE = 150
+EUROPE_PRICE = 50.0
+WORLD_PRICE = 150.0
 
-WEEKEND_GAP = 14
-NUM_WEEKENDS = 12
+INTERVAL_DAYS = 14
+MAX_WEEKENDS_PER_RUN = 1  # controla consumo API
+
+AMADEUS_CLIENT_ID = os.environ.get("AMADEUS_CLIENT_ID")
+AMADEUS_CLIENT_SECRET = os.environ.get("AMADEUS_CLIENT_SECRET")
 
 GMAIL_USER = os.environ.get("GMAIL_USER")
 GMAIL_PASSWORD = os.environ.get("GMAIL_PASSWORD")
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-}
+AUTH_URL = "https://test.api.amadeus.com/v1/security/oauth2/token"
+SEARCH_URL = "https://test.api.amadeus.com/v2/shopping/flight-offers"
+
 
 # ============================
-# FINES DE SEMANA
+# HERRAMIENTAS
 # ============================
 
-def get_weekends(start_date):
+def get_token():
+    data = {
+        "grant_type": "client_credentials",
+        "client_id": AMADEUS_CLIENT_ID,
+        "client_secret": AMADEUS_CLIENT_SECRET
+    }
+    r = requests.post(AUTH_URL, data=data)
+    r.raise_for_status()
+    return r.json()["access_token"]
+
+
+def next_friday_from(d):
+    days = (4 - d.weekday()) % 7
+    return d if days == 0 else d + timedelta(days=days)
+
+
+def generate_weekends(start_date):
+    if isinstance(start_date, str):
+        start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+    d = next_friday_from(start_date)
     weekends = []
-    current = start_date
-    for _ in range(NUM_WEEKENDS):
-        friday = current + timedelta((4 - current.weekday()) % 7)
-        monday = friday + timedelta(days=3)
-        weekends.append((friday, monday))
-        current = friday + timedelta(days=WEEKEND_GAP)
+    for _ in range(MAX_WEEKENDS_PER_RUN):
+        weekends.append((d, d + timedelta(days=3)))
+        d = d + timedelta(days=INTERVAL_DAYS)
     return weekends
 
-# ============================
-# FILTRO
-# ============================
 
 def normalize_price(p):
-    """Convierte precio de dict o string a float."""
     try:
-        if isinstance(p, dict):
-            return float(p.get("amount", 9999))
-        return float(str(p).replace("€", "").replace(",", "."))
+        return float(p)
     except:
-        return 9999.0
+        return 99999.0
 
 
-def filter_flights(flights):
-    filtered = []
-    for f in flights:
-        price = normalize_price(f.get("price", 9999))
-        f["price"] = price  # almacenamos el valor limpio para el email
-        country = f.get("country", "")
-
-        if country in EUROPE_CODES or country == "MA":
-            if price <= EUROPE_PRICE:
-                filtered.append(f)
-        else:
-            if price <= WORLD_PRICE:
-                filtered.append(f)
-
-    return filtered
-
-# ============================
-# SCRAPERS
-# ============================
-
-# ----- RYANAIR -----
-
-def fetch_ryanair(origin, dep, ret):
-    url = (
-        "https://www.ryanair.com/api/farfnd/3/oneWayFares"
-        f"?departureAirportIataCode={origin}"
-        f"&language=en&limit=1000&market=en-gb&offset=0&page=0"
-        f"&outboundDepartureDateFrom={dep.strftime('%Y-%m-%d')}"
-        f"&outboundDepartureDateTo={dep.strftime('%Y-%m-%d')}"
-    )
-
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=20)
-        data = r.json()
-    except:
-        return []
-
-    flights = []
-
-    for item in data.get("fares", []):
-        flights.append({
-            "origin": origin,
-            "destination": item.get("arrivalAirport", {}).get("iataCode", "UNK"),
-            "dep": dep.strftime("%Y-%m-%d"),
-            "ret": ret.strftime("%Y-%m-%d"),
-            "price": item.get("outbound", {}).get("price", 999),
-            "country": item.get("arrivalAirport", {}).get("countryCode", "UNK"),
-            "link": "https://www.ryanair.com/",
-        })
-
-    return flights
-
-# ----- VUELING -----
-
-def fetch_vueling(origin, dep, ret):
-    url = (
-        "https://www.vueling.com/en/booking/availability"
-        f"?DepartureStation={origin}"
-        f"&ArrivalStation=ANY"
-        f"&DepartureDate={dep.strftime('%Y-%m-%d')}"
-    )
-
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=20)
-        soup = BeautifulSoup(r.text, "html.parser")
-    except:
-        return []
-
-    flights = []
-
-    rows = soup.select(".flight-info")
-
-    for row in rows:
-        try:
-            dest = row.select_one(".destination").get_text(strip=True)
-            price = row.select_one(".price").get_text(strip=True).replace("€", "")
-            price = float(price)
-
-            flights.append({
-                "origin": origin,
-                "destination": dest,
-                "dep": dep.strftime("%Y-%m-%d"),
-                "ret": ret.strftime("%Y-%m-%d"),
-                "price": price,
-                "country": "ES",  # Vueling mostly EU; no easy country API → fallback
-                "link": "https://www.vueling.com/",
-            })
-        except:
-            continue
-
-    return flights
-
-# ----- EASYJET -----
-
-def fetch_easyjet(origin, dep, ret):
-    url = (
-        f"https://www.easyjet.com/en/cheap-flights/{origin.lower()}"
-        f"?dates={dep.strftime('%Y-%m-%d')}"
-    )
-
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=20)
-        soup = BeautifulSoup(r.text, "html.parser")
-    except:
-        return []
-
-    flights = []
-
-    items = soup.select(".tile--fare")
-
-    for item in items:
-        try:
-            dest = item.select_one(".fare-destination").get_text(strip=True)
-            price = item.select_one(".price").get_text(strip=True)
-            price = float(price.replace("€", "").replace(",", ""))
-
-            flights.append({
-                "origin": origin,
-                "destination": dest,
-                "dep": dep.strftime("%Y-%m-%d"),
-                "ret": ret.strftime("%Y-%m-%d"),
-                "price": price,
-                "country": "EU",
-                "link": "https://www.easyjet.com/",
-            })
-        except:
-            continue
-
-    return flights
-
-# ----- WIZZ AIR -----
-
-def fetch_wizz(origin, dep, ret):
-    url = (
-        "https://be.wizzair.com/5.2.1/Api/search/search"
-    )
-
-    payload = {
-        "flightList": [
-            {
-                "departureStation": origin,
-                "arrivalStation": "",
-                "departureDate": dep.strftime("%Y-%m-%d")
-            }
-        ],
-        "adultCount": 1
+def search_amadeus(origin, dep, ret, token):
+    params = {
+        "originLocationCode": origin,
+        "destinationLocationCode": "ANY",
+        "departureDate": dep.strftime("%Y-%m-%d"),
+        "returnDate": ret.strftime("%Y-%m-%d"),
+        "adults": "1",
+        "currencyCode": "EUR",
+        "max": "20"
     }
+    headers = {"Authorization": f"Bearer {token}"}
+    r = requests.get(SEARCH_URL, params=params, headers=headers, timeout=20)
+    if r.status_code == 429:
+        print("RATE LIMIT — demasiadas llamadas hoy")
+        return []
+    r.raise_for_status()
+    return r.json().get("data", [])
+
+
+def extract_data(offer):
+    price = normalize_price(offer["price"]["total"])
 
     try:
-        r = requests.post(url, json=payload, headers=HEADERS, timeout=20)
-        data = r.json()
+        last_seg = offer["itineraries"][-1]["segments"][-1]
+        dest = last_seg["arrival"]["iataCode"]
+        country = last_seg["arrival"].get("countryCode")
     except:
-        return []
+        dest, country = None, None
 
-    flights = []
+    # calcular duración total
+    total_minutes = 0
+    try:
+        for itin in offer["itineraries"]:
+            for seg in itin["segments"]:
+                dur = seg.get("duration", "")
+                # dur ejemplo: "PT2H30M"
+                h, m = 0, 0
+                if "H" in dur:
+                    h = int(dur.split("H")[0].replace("PT",""))
+                    rest = dur.split("H")[1]
+                    if "M" in rest:
+                        m = int(rest.replace("M",""))
+                elif "M" in dur:
+                    m = int(dur.replace("PT","").replace("M",""))
+                total_minutes += h*60 + m
+    except:
+        total_minutes = 0
 
-    for item in data.get("outboundFlights", []):
-        flights.append({
-            "origin": origin,
-            "destination": item.get("arrivalStation", "UNK"),
-            "dep": dep.strftime("%Y-%m-%d"),
-            "ret": ret.strftime("%Y-%m-%d"),
-            "price": item.get("price", 999),
-            "country": item.get("isDomestic", "EU"),
-            "link": "https://wizzair.com",
-        })
+    link = offer.get("self", {}).get("href")
 
-    return flights
+    return price, dest, country, total_minutes, link
+
+
+def is_europe_or_ma(code):
+    if not code:
+        return False
+    return code in EUROPE_CODES
+
 
 # ============================
-# MAIL
+# EMAIL
 # ============================
 
-def send_email(flights):
-    body = "Vuelos baratos de fin de semana:\n\n"
-    for f in flights:
-        body += (
-            f"{f['origin']} → {f['destination']} | "
-            f"{f['dep']} - {f['ret']} | {f['price']}€\n{f['link']}\n\n"
-        )
+def send_email(results):
+    body = "Ofertas encontradas:\n\n"
+    for r in results:
+        body += f"{r['origin']} → {r['dest']} | {r['dep']} → {r['ret']} | {r['price']}€\n{r['link']}\n\n"
 
     msg = MIMEText(body)
-    msg["Subject"] = "Alertas vuelos fin de semana"
+    msg["Subject"] = "Ofertas de Fin de Semana"
     msg["From"] = GMAIL_USER
     msg["To"] = GMAIL_USER
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(GMAIL_USER, GMAIL_PASSWORD)
-        server.send_message(msg)
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+        s.login(GMAIL_USER, GMAIL_PASSWORD)
+        s.send_message(msg)
+
 
 # ============================
 # MAIN
 # ============================
 
 def main():
-    start_date = datetime.today()
-    weekends = get_weekends(start_date)
-    all_flights = []
+    start = os.environ.get("START_DATE", date.today().strftime("%Y-%m-%d"))
+    weekends = generate_weekends(start)
+
+    try:
+        token = get_token()
+    except Exception as e:
+        print("Error al obtener token de Amadeus:", e)
+        return
+
+    found = []
 
     for dep, ret in weekends:
         for origin in ORIGINS:
-            all_flights.extend(fetch_ryanair(origin, dep, ret))
-            all_flights.extend(fetch_vueling(origin, dep, ret))
-            all_flights.extend(fetch_easyjet(origin, dep, ret))
-            all_flights.extend(fetch_wizz(origin, dep, ret))
+            offers = search_amadeus(origin, dep, ret, token)
+            for off in offers:
+                price, dest, country, duration, link = extract_data(off)
+                if duration < 60:  # mínimo 1 hora
+                    continue
 
-    filtered = filter_flights(all_flights)
+                if is_europe_or_ma(country):
+                    if price > EUROPE_PRICE:
+                        continue
+                else:
+                    if price > WORLD_PRICE:
+                        continue
 
-    if filtered:
-        send_email(filtered)
-        print(f"Email sent with {len(filtered)} flights.")
+                found.append({
+                    "origin": origin,
+                    "dest": dest,
+                    "country": country,
+                    "dep": dep.strftime("%Y-%m-%d"),
+                    "ret": ret.strftime("%Y-%m-%d"),
+                    "price": price,
+                    "link": link
+                })
+
+            time.sleep(0.4)  # para evitar rate limits
+
+    if found:
+        found.sort(key=lambda x: x["price"])
+        send_email(found)
+        print("Envio email con", len(found), "ofertas.")
     else:
         print("No flights found today.")
 

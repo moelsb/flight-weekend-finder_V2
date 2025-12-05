@@ -9,25 +9,12 @@ import time
 # CONFIGURACIÓN BÁSICA
 # ============================
 
-ORIGINS = ["BCN", "GRO"]
-
-#Paises donde maximo precio es EUROPE_PRICE
-EUROPE_CODES = {
-    "AL","AD","AT","BY","BE","BA","BG","HR","CY","CZ","DK","EE","FI","FR",
-    "DE","GR","HU","IE","IT","LV","LI","LT","LU","MT","MD","MC","ME",
-    "NL","MK","NO","PL","PT","RO","SM","RS","SK","SI","ES","SE","CH",
-    "UA","GB","VA","XK", "DZ", "MA"
-}
-#NO EN LA LISTA: "IS": Islandia, "RU": Rusia, "TR" Turquía
-#"AL": Albania, "AD": Andorra, "AT": Austria, "BY": Bielorrusia, "BE": Bélgica, "BA": Bosnia y Herzegovina, "BG": Bulgaria, "HR": Croacia, "CY": Chipre, "CZ": República Checa, "DK": Dinamarca, "EE": Estonia, "FI": Finlandia, "FR": Francia, "DE": Alemania, "GR": Grecia, "HU": Hungría, "IE": Irlanda, "IT": Italia, "LV": Letonia, "LI": Liechtenstein, "LT": Lituania, "LU": Luxemburgo, "MT": Malta, "MD": Moldavia, "MC": Mónaco, "ME": Montenegro, "NL": Países Bajos, "MK": Macedonia del Norte, "NO": Noruega, "PL": Polonia, "PT": Portugal, "RO": Rumanía, "SM": San Marino, "RS": Serbia, "SK": Eslovaquia, "SI": Eslovenia, "ES": España, "SE": Suecia, "CH": Suiza, "UA": Ucrania, "GB": Reino Unido, "VA": Ciudad del Vaticano, "XK" Kosovo
-#Extra Europa: "DZ": Argelia, "MA": Marruecos 
+# Primer viernes desde el que quieres empezar a generar fines de semana regulares.
+# IMPORTANTE: pon aquí un VIERNES.
+START_DATE = "2025-12-05"
 
 EUROPE_PRICE = 50.0
 WORLD_PRICE = 150.0
-
-# Fines de semana regulares: cada 14 días
-INTERVAL_DAYS = 14
-MAX_WEEKENDS_PER_RUN = 1  # cuántos bloques (dep, ret) miramos por ejecución; controla consumo API
 
 # Fines de semana largos extra (puentes)
 EXTRA_LONG_WEEKENDS = [
@@ -41,9 +28,32 @@ EXTRA_LONG_WEEKENDS = [
     ("2026-09-11", "2026-09-14"),  # Catalunya Day
     ("2026-10-09", "2026-10-12"),  # Spanish National Day
     ("2026-12-24", "2026-12-29"),  # Navidad
+    ("2026-12-30", "2027-01-06"),  # Anio nuevo
 ]
 
+# Aeropuertos de salida
+ORIGINS = ["BCN", "GRO"]
 
+#Minima duracion del vuelo de 1h, en minutos
+MIN_DURATION = 60
+
+# Países que se tratarán con el límite de EUROPE_PRICE
+#"AL": Albania, "AD": Andorra, "AT": Austria, "BY": Bielorrusia, "BE": Bélgica, "BA": Bosnia y Herzegovina, "BG": Bulgaria, "HR": Croacia, "CY": Chipre, "CZ": República Checa, "DK": Dinamarca, "EE": Estonia, "FI": Finlandia, "FR": Francia, "DE": Alemania, "GR": Grecia, "HU": Hungría, "IE": Irlanda, "IT": Italia, "LV": Letonia, "LI": Liechtenstein, "LT": Lituania, "LU": Luxemburgo, "MT": Malta, "MD": Moldavia, "MC": Mónaco, "ME": Montenegro, "NL": Países Bajos, "MK": Macedonia del Norte, "NO": Noruega, "PL": Polonia, "PT": Portugal, "RO": Rumanía, "SM": San Marino, "RS": Serbia, "SK": Eslovaquia, "SI": Eslovenia, "ES": España, "SE": Suecia, "CH": Suiza, "UA": Ucrania, "GB": Reino Unido, "VA": Ciudad del Vaticano, "XK" Kosovo
+#Extra Europa: "DZ": Argelia, "MA": Marruecos 
+#NO EN LA LISTA: "IS": Islandia, "RU": Rusia, "TR" Turquía
+EUROPE_CODES = {
+    "AL","AD","AT","BY","BE","BA","BG","HR","CY","CZ","DK","EE","FI","FR",
+    "DE","GR","HU","IE","IT","LV","LI","LT","LU","MT","MD","MC","ME",
+    "NL","MK","NO","PL","PT","RO","SM","RS","SK","SI","ES","SE","CH",
+    "UA","GB","VA","XK", "DZ", "MA"
+}
+
+# Fines de semana regulares: cada 14 días
+INTERVAL_DAYS = 14
+MAX_WEEKENDS_PER_RUN = 1  # cuántos fines de semana miramos por ejecución; 26 = 1 Anio; controla consumo API
+
+
+# Credenciales desde variables de entorno (GitHub Secrets)
 AMADEUS_CLIENT_ID = os.environ.get("AMADEUS_CLIENT_ID")
 AMADEUS_CLIENT_SECRET = os.environ.get("AMADEUS_CLIENT_SECRET")
 
@@ -54,22 +64,13 @@ AUTH_URL = "https://test.api.amadeus.com/v1/security/oauth2/token"
 SEARCH_URL = "https://test.api.amadeus.com/v2/shopping/flight-offers"
 
 
+
 # ============================
-# HERRAMIENTAS
+# FECHAS: FINES DE SEMANA
 # ============================
 
-def get_token():
-    data = {
-        "grant_type": "client_credentials",
-        "client_id": AMADEUS_CLIENT_ID,
-        "client_secret": AMADEUS_CLIENT_SECRET
-    }
-    r = requests.post(AUTH_URL, data=data)
-    r.raise_for_status()
-    return r.json()["access_token"]
-
-
-def generate_weekends(start_date):
+def generate_regular_weekends(first_friday_str):
+    #Genera fines de semana regulares (viernes–lunes) cada 14 días, empezando desde el viernes indicado en first_friday_str (YYYY-MM-DD).
     if isinstance(first_friday_str, str):
         d = datetime.strptime(first_friday_str, "%Y-%m-%d").date()
     else
@@ -82,8 +83,13 @@ def generate_weekends(start_date):
         d = d + timedelta(days=INTERVAL_DAYS)
     return weekends
 
-def get_all_periods(first_friday_str):
-    regular = generate_regular_weekends(first_friday_str)
+def get_all_periods():
+    #Combina:
+    #  - fines de semana regulares (cada 14 días desde START_DATE)
+    #  - fines de semana largos extra (EXTRA_LONG_WEEKENDS)
+    # Devuelve lista de (dep_date, ret_date) ordenada.
+    
+    regular = generate_regular_weekends(START_DATE)
 
     extra = []
     for dep_str, ret_str in EXTRA_LONG_WEEKENDS:
@@ -94,6 +100,21 @@ def get_all_periods(first_friday_str):
     # combinar y eliminar duplicados
     all_periods = set(regular + extra)
     return sorted(all_periods)
+
+
+# ============================
+# AMADEUS
+# ============================
+
+def get_token():
+    data = {
+        "grant_type": "client_credentials",
+        "client_id": AMADEUS_CLIENT_ID,
+        "client_secret": AMADEUS_CLIENT_SECRET
+    }
+    r = requests.post(AUTH_URL, data=data, timeout=20)
+    r.raise_for_status()
+    return r.json()["access_token"]
 
 def normalize_price(p):
     try:
@@ -115,49 +136,56 @@ def search_amadeus(origin, dep, ret, token):
     headers = {"Authorization": f"Bearer {token}"}
     r = requests.get(SEARCH_URL, params=params, headers=headers, timeout=20)
     if r.status_code == 429:
-        print("RATE LIMIT — demasiadas llamadas hoy")
+        print("RATE LIMIT Amadeus (429): demasiadas llamadas hoy.")
         return []
     r.raise_for_status()
     return r.json().get("data", [])
 
 
 def extract_data(offer):
-    price = normalize_price(offer["price"]["total"])
+    # Precio total (string tipo "123.45")
+    price = normalize_price(offer.get("price", {}).get("total"))
 
-    try:
-        last_seg = offer["itineraries"][-1]["segments"][-1]
-        dest = last_seg["arrival"]["iataCode"]
-        country = last_seg["arrival"].get("countryCode")
-    except:
-        dest, country = None, None
-
-    # calcular duración total
+    dest = None
+    country = None
     total_minutes = 0
-    try:
-        for itin in offer["itineraries"]:
-            for seg in itin["segments"]:
-                dur = seg.get("duration", "")
-                # dur ejemplo: "PT2H30M"
-                h, m = 0, 0
-                if "H" in dur:
-                    h = int(dur.split("H")[0].replace("PT",""))
-                    rest = dur.split("H")[1]
-                    if "M" in rest:
-                        m = int(rest.replace("M",""))
-                elif "M" in dur:
-                    m = int(dur.replace("PT","").replace("M",""))
-                total_minutes += h*60 + m
-    except:
-        total_minutes = 0
-
     link = offer.get("self", {}).get("href")
 
+    try:
+        itineraries = offer.get("itineraries", [])
+        last_seg = itineraries[-1]["segments"][-1]
+        dest = last_seg["arrival"]["iataCode"]
+        country = last_seg["arrival"].get("countryCode")
+
+        for itin in itineraries:
+            for seg in itin["segments"]:
+                dur = seg.get("duration", "")  # p.ej. "PT2H30M"
+                h = 0
+                m = 0
+                if isinstance(dur, str) and dur.startswith("PT"):
+                    body = dur[2:]
+                    if "H" in body:
+                        parts = body.split("H")
+                        h = int(parts[0]) if parts[0] else 0
+                        rest = parts[1]
+                        if "M" in rest:
+                            m = int(rest.replace("M", "")) if rest.replace("M","") else 0
+                    elif "M" in body:
+                        m = int(body.replace("M", "")) if body.replace("M","") else 0
+                total_minutes += h * 60 + m
+    except Exception:
+        pass
+    
     return price, dest, country, total_minutes, link
 
+# ============================
+# FILTRO
+# ============================
 
 def is_europe_or_ma(code):
     if not code:
         return False
+    code = code.upper()
     return code in EUROPE_CODES
 
 
@@ -168,7 +196,7 @@ def is_europe_or_ma(code):
 def send_email(results):
     body = "Ofertas encontradas:\n\n"
     for r in results:
-        body += f"{r['origin']} → {r['dest']} | {r['dep']} → {r['ret']} | {r['price']}€\n{r['link']}\n\n"
+        body += f"({r.get('country','??')}) | "f"{r['origin']} → {r['dest']} | {r['dep']} → {r['ret']} | {r['price']}€\n{r['link']}\n\n"
 
     msg = MIMEText(body)
     msg["Subject"] = "Ofertas de Fin de Semana"
@@ -185,15 +213,13 @@ def send_email(results):
 # ============================
 
 def main():
-    start = os.environ.get("first_friday_str", date.today().strftime("%Y-%m-%d"))
-    weekends = generate_weekends(start)
-
     try:
         token = get_token()
     except Exception as e:
         print("Error al obtener token de Amadeus:", e)
         return
 
+    periods = get_all_periods()
     found = []
 
     for dep, ret in weekends:
@@ -201,9 +227,11 @@ def main():
             offers = search_amadeus(origin, dep, ret, token)
             for off in offers:
                 price, dest, country, duration, link = extract_data(off)
-                if duration < 60:  # mínimo 1 hora
+                if duration < MIN_DURATION:  # mínimo 1 hora
                     continue
 
+                
+                # filtro por precio según región
                 if is_europe_or_ma(country):
                     if price > EUROPE_PRICE:
                         continue
@@ -218,7 +246,7 @@ def main():
                     "dep": dep.strftime("%Y-%m-%d"),
                     "ret": ret.strftime("%Y-%m-%d"),
                     "price": price,
-                    "link": link
+                    "link": link or "",
                 })
 
             time.sleep(0.4)  # para evitar rate limits

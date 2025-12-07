@@ -212,23 +212,23 @@ def send_email(results):
 # MAIN
 # ============================
 
-def main():
-    try:
-        token = get_token()
-    except Exception as e:
-        print("Error al obtener token de Amadeus:", e)
-        return
+#def main():
+#    try:
+#       token = get_token()
+#    except Exception as e:
+#        print("Error al obtener token de Amadeus:", e)
+#        return
 
     periods = get_all_periods()
     found = []
 
-    for dep, ret in weekends:
-        for origin in ORIGINS:
-            offers = search_amadeus(origin, dep, ret, token)
-            for off in offers:
-                price, dest, country, duration, link = extract_data(off)
-                if duration < MIN_DURATION:
-                    continue
+#    for dep, ret in weekends:
+#        for origin in ORIGINS:
+#            offers = search_amadeus(origin, dep, ret, token)
+#            for off in offers:
+#                price, dest, country, duration, link = extract_data(off)
+#                if duration < MIN_DURATION:
+#                   continue
 
                 
                 # filtro por precio según región
